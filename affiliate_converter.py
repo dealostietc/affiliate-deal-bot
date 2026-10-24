@@ -5,8 +5,7 @@ CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
 
 def convert_to_affiliate_link(original_url):
     """
-    Converts any store URL (Amazon, Flipkart, Myntra, etc.) 
-    into your tracked Cuelinks affiliate link.
+    Converts any product URL into a Cuelinks short link using V3 API.
     """
     if not original_url:
         return ""
@@ -15,25 +14,24 @@ def convert_to_affiliate_link(original_url):
         print("Warning: CUELINKS_API_KEY is missing. Returning raw URL.")
         return original_url
 
-    # Cuelinks Link Conversion Endpoint
-    api_url = "https://www.cuelinks.com/api/v2/links.json"
+    # Updated Cuelinks V3 Endpoint
+    api_url = "https://developers.cuelinks.com/pub_api/v3/links/convert"
     
     headers = {
-        "Authorization": f"Token token={CUELINKS_API_KEY}",
+        "Authorization": f"Token {CUELINKS_API_KEY}",
         "Content-Type": "application/json"
     }
     
     payload = {
-        "url": original_url,
-        "shorten": "true" # Optional: returns a shortened clnk.in link if desired
+        "url": original_url
     }
     
     try:
         response = requests.post(api_url, json=payload, headers=headers)
         if response.status_code == 200:
             data = response.json()
-            # Cuelinks returns the affiliate URL under 'url' or 'short_url'
-            return data.get("url", original_url)
+            # Returns the shortened clnk.in tracking URL
+            return data.get("short_url") or data.get("affiliate_url", original_url)
         else:
             print(f"Cuelinks API error ({response.status_code}): {response.text}")
             return original_url
