@@ -1,9 +1,12 @@
-import json
 import os
-from affiliate_converter import convert_to_affiliate_link
-from telegram_bot import send_deal
+import json
+import requests
 
-# Load previously posted deals to avoid duplicates
+# Load Environment Variables
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
+
 CACHE_FILE = "posted_deals.json"
 
 def load_posted_deals():
@@ -16,13 +19,74 @@ def save_posted_deals(posted_list):
     with open(CACHE_FILE, "w") as f:
         json.dump(posted_list, f, indent=2)
 
-def run_pipeline():
-    posted_deals = load_posted_deals()
+def convert_to_affiliate_link(original_url):
+    if not original_url:
+        return ""
+    if not CUELINKS_API_KEY:
+        print("❌ CUELINKS_API_KEY is missing!")
+        return original_url
+
+    api_url = "https://developers.cuelinks.com/pub_api/v3/links/convert"
+    headers = {
+        "Authorization": f"Token {CUELINKS_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {"url": original_url, "shorten": True}
     
-    # Example Deal Object (Replace with dynamic web scraping/API fetching)
+    try:
+        response = requests.post(api_url, json=payload, headers=headers)
+        data = response.json()
+        print(f"🔗 Cuelinks Response Status: {response.status_code}")
+        print(f"🔗 Cuelinks Response Data: {data}")
+        
+        if response.status_code in [200, 201]:
+            return data.get("short_url") or data.get("tracking_url") or data.get("affiliate_url") or original_url
+        else:
+            print(f"⚠️ Cuelinks conversion failed: {data}")
+            return original_url
+    except Exception as e:
+        print(f"❌ Exception during Cuelinks conversion: {e}")
+        return original_url
+
+def send_deal_to_telegram(deal):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
+        print("❌ Telegram Bot Token or Channel ID is missing!")
+        return False
+
+    message = (
+        f"**{deal.get('title')} at {deal.get('effective_price')}**\n\n"
+    )
+    if deal.get('cb_offer_link') and deal.get('cb_offer_text'):
+        message += f"Collect {deal.get('cb_offer_text')} : {deal.get('cb_offer_link')}\n\n"
+    message += f"Then Buy : {deal.get('affiliate_buy_link')}\n\n"
+    if deal.get('discounts_text'):
+        message += f"{deal.get('discounts_text')}"
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHANNEL_ID,
+        "text": message.strip(),
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": False
+    }
+
+    try:
+        response = requests.post(url, json=payload)
+        res_data = response.json()
+        print(f"📢 Telegram API Response: {res_data}")
+        return res_data.get("ok", False)
+    except Exception as e:
+        print(f"❌ Exception sending to Telegram: {e}")
+        return False
+
+def run_pipeline():
+    print("🚀 Starting deal automation pipeline...")
+    posted_deals = load_posted_deals()
+
+    # Test sample deal
     sample_deals = [
         {
-            "id": "havells_reo_bldc_1200mm",
+            "id": "havells_reo_bldc_1200mm_v2",
             "title": "Havells REO BLDC 1200MM 5 Star Rated Ceiling Fan",
             "effective_price": "1960",
             "cb_offer_text": "15% CB Offer",
@@ -34,20 +98,24 @@ def run_pipeline():
 
     for deal in sample_deals:
         if deal["id"] in posted_deals:
-            print(f"Skipping deal {deal['id']} (already posted).")
+            print(f"⏭️ Skipping deal {deal['id']} (already exists in posted_deals.json).")
             continue
 
-        # Convert links to affiliate links
+        print(f"🔄 Converting links for: {deal['title']}")
         deal["cb_offer_link"] = convert_to_affiliate_link(deal["raw_cb_link"]) if deal.get("raw_cb_link") else None
         deal["affiliate_buy_link"] = convert_to_affiliate_link(deal["raw_buy_link"])
 
-        # Send to Telegram
-        success = send_deal(deal)
+        print(f"📤 Posting to Telegram channel: {TELEGRAM_CHANNEL_ID}")
+        success = send_deal_to_telegram(deal)
+        
         if success:
             posted_deals.append(deal["id"])
-            print(f"Successfully posted deal: {deal['title']}")
+            print(f"✅ Successfully posted and cached deal ID: {deal['id']}")
+        else:
+            print(f"❌ Failed to post deal ID: {deal['id']}")
 
     save_posted_deals(posted_deals)
+    print("🏁 Pipeline execution finished.")
 
 if __name__ == "__main__":
     run_pipeline()
