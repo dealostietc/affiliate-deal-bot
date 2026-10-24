@@ -1,27 +1,42 @@
 import os
 import requests
 
-EARNKARO_API_KEY = os.getenv("EARNKARO_API_KEY")
+CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
 
 def convert_to_affiliate_link(original_url):
     """
-    Converts any store URL (Amazon, Flipkart, etc.) into your custom affiliate short link.
-    Replace this block with your Cuelinks or EarnKaro API call.
+    Converts any store URL (Amazon, Flipkart, Myntra, etc.) 
+    into your tracked Cuelinks affiliate link.
     """
-    if not EARNKARO_API_KEY:
-        # Fallback / Direct tag append for Amazon if API is omitted
-        if "amazon" in original_url:
-            tag = os.getenv("AMAZON_AFFILIATE_TAG", "yourtag-21")
-            return f"{original_url}?tag={tag}"
+    if not original_url:
+        return ""
+
+    if not CUELINKS_API_KEY:
+        print("Warning: CUELINKS_API_KEY is missing. Returning raw URL.")
         return original_url
 
-    api_url = "https://api.earnkaro.com/v1/convert" # Example API endpoint
-    payload = {"url": original_url, "api_key": EARNKARO_API_KEY}
+    # Cuelinks Link Conversion Endpoint
+    api_url = "https://www.cuelinks.com/api/v2/links.json"
+    
+    headers = {
+        "Authorization": f"Token token={CUELINKS_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "url": original_url,
+        "shorten": "true" # Optional: returns a shortened clnk.in link if desired
+    }
     
     try:
-        response = requests.post(api_url, json=payload)
-        data = response.json()
-        return data.get("affiliate_url", original_url)
+        response = requests.post(api_url, json=payload, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            # Cuelinks returns the affiliate URL under 'url' or 'short_url'
+            return data.get("url", original_url)
+        else:
+            print(f"Cuelinks API error ({response.status_code}): {response.text}")
+            return original_url
     except Exception as e:
-        print(f"Error converting link: {e}")
+        print(f"Error connecting to Cuelinks API: {e}")
         return original_url
