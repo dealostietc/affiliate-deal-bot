@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from deal_fetcher import fetch_live_deals
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
@@ -20,7 +21,7 @@ def save_posted_deals(posted_list):
 
 def convert_to_affiliate_link(original_url):
     """
-    Converts real merchant URLs into Cuelinks tracked links using V3 API.
+    Converts merchant URLs into Cuelinks short links.
     """
     if not original_url:
         return ""
@@ -38,31 +39,25 @@ def convert_to_affiliate_link(original_url):
     try:
         response = requests.post(api_url, json=payload, headers=headers)
         data = response.json()
-        print(f"🔗 Cuelinks Response Status: {response.status_code}")
         
         if response.status_code in [200, 201]:
             res_data = data.get("data", {})
-            # Return shortened clnk.in link, affiliate tracking link, or fallback to original
-            converted_link = res_data.get("short_url") or res_data.get("tracking_url") or res_data.get("affiliate_url") or original_url
-            print(f"✅ Converted Link: {converted_link}")
-            return converted_link
+            return res_data.get("short_url") or res_data.get("tracking_url") or res_data.get("affiliate_url") or original_url
         else:
-            print(f"⚠️ Cuelinks conversion failed: {data}")
+            print(f"⚠️ Link conversion fallback: {response.status_code}")
             return original_url
     except Exception as e:
-        print(f"❌ Exception during Cuelinks conversion: {e}")
+        print(f"❌ Exception in conversion: {e}")
         return original_url
 
 def send_deal_to_telegram(deal):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
-        print("❌ Telegram Bot Token or Channel ID is missing!")
+        print("❌ Missing Telegram credentials.")
         return False
 
     title = deal.get('title', '')
     price = deal.get('effective_price', '')
     cb_text = deal.get('cb_offer_text', '')
-    
-    # ACCESSED CONVERTED AFFILIATE LINKS HERE
     cb_link = deal.get('cb_offer_link', '')
     buy_link = deal.get('affiliate_buy_link', '')
     discounts = deal.get('discounts_text', '')
@@ -71,11 +66,13 @@ def send_deal_to_telegram(deal):
     
     if cb_link and cb_text:
         message += f"Collect {cb_text} : {cb_link}\n\n"
+    elif cb_text:
+        message += f"<b>Offer Info:</b> {cb_text}\n\n"
         
     message += f"Then Buy : {buy_link}\n\n"
     
     if discounts:
-        message += f"{discounts}"
+        message += f"<i>{discounts}</i>"
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -88,39 +85,33 @@ def send_deal_to_telegram(deal):
     try:
         response = requests.post(url, json=payload)
         res_data = response.json()
-        print(f"📢 Telegram API Response: {res_data}")
+        print(f"📢 Telegram API Status: {res_data.get('ok')}")
         return res_data.get("ok", False)
     except Exception as e:
-        print(f"❌ Exception sending to Telegram: {e}")
+        print(f"❌ Telegram exception: {e}")
         return False
 
 def run_pipeline():
-    print("🚀 Starting deal automation pipeline...")
+    print("🚀 Starting dynamic deal automation pipeline...")
     posted_deals = load_posted_deals()
 
-    # REAL PRODUCT TEST DEAL (Valid Amazon & Flipkart URLs)
-    sample_deals = [
-        {
-            "id": "havells_reo_bldc_1200mm_v4",
-            "title": "Havells REO BLDC 1200MM 5 Star Rated Ceiling Fan",
-            "effective_price": "1960",
-            "cb_offer_text": "15% CB Offer",
-            "raw_cb_link": "https://www.amazon.in/dp/B08L5WH3P3",
-            "raw_buy_link": "https://www.amazon.in/dp/B08L5WH3P3",
-            "discounts_text": "Apply Rs.390 Coupon + Rs.345 Cashback"
-        }
-    ]
+    # Dynamic fetching from Cuelinks Live API (no hardcoded deals)
+    live_deals = fetch_live_deals(limit=5)
 
-    for deal in sample_deals:
+    if not live_deals:
+        print("ℹ️ No new live deals returned from the API.")
+        return
+
+    for deal in live_deals:
         if deal["id"] in posted_deals:
-            print(f"⏭️ Skipping deal {deal['id']} (already exists in posted_deals.json).")
+            print(f"⏭️ Skipping deal '{deal['title'][:30]}...' (already posted).")
             continue
 
         print(f"🔄 Converting links for: {deal['title']}")
         deal["cb_offer_link"] = convert_to_affiliate_link(deal["raw_cb_link"]) if deal.get("raw_cb_link") else None
         deal["affiliate_buy_link"] = convert_to_affiliate_link(deal["raw_buy_link"])
 
-        print(f"📤 Posting to Telegram channel...")
+        print(f"📤 Posting deal to Telegram...")
         success = send_deal_to_telegram(deal)
         
         if success:
@@ -130,7 +121,7 @@ def run_pipeline():
             print(f"❌ Failed to post deal ID: {deal['id']}")
 
     save_posted_deals(posted_deals)
-    print("🏁 Pipeline execution finished.")
+    print("🏁 Dynamic pipeline execution finished.")
 
 if __name__ == "__main__":
     run_pipeline()
