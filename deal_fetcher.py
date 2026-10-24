@@ -1,69 +1,100 @@
 import os
 import requests
 import re
-from datetime import datetime
+from xml.etree import ElementTree as ET
+
+def clean_amazon_url(url):
+    """
+    Strips tracking queries and cleans Amazon India URLs into canonical /dp/ASIN format
+    so Cuelinks converts them without triggering 404 errors.
+    """
+    if "amazon.in" in url or "amzn.in" in url:
+        asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', url)
+        if asin_match:
+            return f"https://www.amazon.in/dp/{asin_match.group(1)}"
+    return url
 
 def fetch_live_deals(limit=5):
     """
-    Fetches real-time individual product deals with precise pricing,
-    discounts, and clean direct product links for Indian e-commerce platforms.
+    Dynamically fetches live individual product deals from public Indian deal feeds.
+    Parses live XML streams, extracts actual merchant product URLs, and formats them.
     """
-    print("📡 Fetching targeted individual product deals for Indian platforms...")
+    print("📡 Dynamically fetching live Indian e-commerce product deals...")
     
     extracted_deals = []
-    
-    # Curated high-converting individual product deal database for Indian platforms
-    # Using specific item links so Cuelinks generates precise product-level tracking links.
-    product_pool = [
-        {
-            "id": "amzn_bldc_fan_deal",
-            "title": "Havells REO BLDC 1200MM 5 Star Rated Ceiling Fan",
-            "effective_price": "₹1,960",
-            "cb_offer_text": "15% Bank Cashback Offer",
-            "raw_cb_link": "https://www.amazon.in/dp/B08L5WH3P3",
-            "raw_buy_link": "https://www.amazon.in/dp/B08L5WH3P3",
-            "discounts_text": "Apply ₹390 Coupon on page + ₹345 Extra Cashback at checkout."
-        },
-        {
-            "id": "amzn_5g_phone_deal",
-            "title": "Trending 5G Smartphone (6GB RAM, 128GB Storage)",
-            "effective_price": "₹10,999",
-            "cb_offer_text": "₹1,000 Instant Bank Discount",
-            "raw_cb_link": "https://www.amazon.in/dp/B0C9344XZ6",
-            "raw_buy_link": "https://www.amazon.in/dp/B0C9344XZ6",
-            "discounts_text": "Lowest price online + No Cost EMI available starting ₹518/month."
-        },
-        {
-            "id": "fk_wireless_earbuds",
-            "title": "Active Noise Cancelling Wireless Earbuds with 50H Playtime",
-            "effective_price": "₹1,299",
-            "cb_offer_text": "Extra 10% Off via Flipkart Axis Bank Card",
-            "raw_cb_link": "https://www.flipkart.com/",
-            "raw_buy_link": "https://www.flipkart.com/",
-            "discounts_text": "Flash deal price dropped from ₹3,999. Grab before stock ends!"
-        },
-        {
-            "id": "myntra_mens_sneakers",
-            "title": "Premium Casual Sneakers & Running Shoes Combo",
-            "effective_price": "₹849",
-            "cb_offer_text": "Flat ₹200 Coupon Code",
-            "raw_cb_link": "https://www.myntra.com/",
-            "raw_buy_link": "https://www.myntra.com/",
-            "discounts_text": "Clearance sale price. 70% Off retail value."
-        },
-        {
-            "id": "amzn_kitchen_chopper",
-            "title": "Compact Vegetable Chopper & Blender for Kitchen",
-            "effective_price": "₹249",
-            "cb_offer_text": "Lightning Deal Discount",
-            "raw_cb_link": "https://www.amazon.in/dp/B07W7V9V63",
-            "raw_buy_link": "https://www.amazon.in/dp/B07W7V9V63",
-            "discounts_text": "Best-seller kitchen utility tool. Over 40,000 positive ratings."
-        }
+    seen_links = set()
+
+    # Public RSS deal feeds that stream live individual Indian product price drops
+    feed_urls = [
+        "https://www.desidime.com/feed",
+        "https://freekamaal.com/feed/"
     ]
 
-    # Rotate or filter based on limit
-    extracted_deals = product_pool[:limit]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
 
-    print(f"✅ Successfully prepared {len(extracted_deals)} individual product deals!")
+    for rss_url in feed_urls:
+        if len(extracted_deals) >= limit:
+            break
+        try:
+            response = requests.get(rss_url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                # Parse XML item blocks
+                items = re.findall(r'<item>(.*?)</item>', response.text, re.DOTALL)
+                
+                for item in items:
+                    if len(extracted_deals) >= limit:
+                        break
+                        
+                    title_m = re.search(r'<title>(.*?)</title>', item, re.DOTALL)
+                    link_m = re.search(r'<link>(.*?)</link>', item, re.DOTALL)
+                    desc_m = re.search(r'<description>(.*?)</description>', item, re.DOTALL)
+                    
+                    title = title_m.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if title_m else ""
+                    raw_link = link_m.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if link_m else ""
+                    desc = desc_m.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if desc_m else ""
+
+                    if not raw_link or not title:
+                        continue
+
+                    # Target Indian e-commerce merchants
+                    valid_domains = [
+                        'amazon.in', 'flipkart.com', 'myntra.com', 
+                        'ajio.com', 'croma.com', 'blinkit.com', 
+                        'zepto', 'meesho.com', 'shopsy.in'
+                    ]
+                    
+                    # Verify link or description points to a supported merchant
+                    is_indian_merchant = any(domain in raw_link.lower() or domain in desc.lower() for domain in valid_domains)
+                    
+                    # Clean Amazon URLs to prevent 404s
+                    clean_url = clean_amazon_url(raw_link)
+
+                    if is_indian_merchant and clean_url not in seen_links:
+                        seen_links.add(clean_url)
+                        
+                        # Extract price pattern (e.g. "Product at Rs. 499")
+                        price_match = re.search(r'(?:at|@)\s*(?:Rs\.?|₹)\s*([\d,]+)', title, re.IGNORECASE)
+                        price = f"₹{price_match.group(1)}" if price_match else "Live Deal Price"
+                        
+                        # Generate unique ID based on product link hash
+                        deal_id = f"dyn_deal_{abs(hash(clean_url))}"
+
+                        clean_desc = re.sub(r'<[^>]+>', '', desc)[:130]
+
+                        extracted_deals.append({
+                            "id": deal_id,
+                            "title": title[:110],
+                            "effective_price": price,
+                            "cb_offer_text": "⚡ Live Price Drop",
+                            "raw_cb_link": None,
+                            "raw_buy_link": clean_url,
+                            "discounts_text": clean_desc if clean_desc else "Limited time offer on live product page."
+                        })
+        except Exception as e:
+            print(f"⚠️ Error fetching from {rss_url}: {e}")
+
+    print(f"✅ Successfully extracted {len(extracted_deals)} live dynamic product deals!")
     return extracted_deals
