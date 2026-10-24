@@ -2,7 +2,6 @@ import os
 import json
 import requests
 
-# Load Environment Variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
@@ -20,6 +19,9 @@ def save_posted_deals(posted_list):
         json.dump(posted_list, f, indent=2)
 
 def convert_to_affiliate_link(original_url):
+    """
+    Converts real merchant URLs into Cuelinks tracked links using V3 API.
+    """
     if not original_url:
         return ""
     if not CUELINKS_API_KEY:
@@ -39,8 +41,11 @@ def convert_to_affiliate_link(original_url):
         print(f"🔗 Cuelinks Response Status: {response.status_code}")
         
         if response.status_code in [200, 201]:
-            # Fallback chain for Cuelinks V3 response fields
-            return data.get("short_url") or data.get("tracking_url") or data.get("affiliate_url") or original_url
+            res_data = data.get("data", {})
+            # Return shortened clnk.in link, affiliate tracking link, or fallback to original
+            converted_link = res_data.get("short_url") or res_data.get("tracking_url") or res_data.get("affiliate_url") or original_url
+            print(f"✅ Converted Link: {converted_link}")
+            return converted_link
         else:
             print(f"⚠️ Cuelinks conversion failed: {data}")
             return original_url
@@ -56,11 +61,12 @@ def send_deal_to_telegram(deal):
     title = deal.get('title', '')
     price = deal.get('effective_price', '')
     cb_text = deal.get('cb_offer_text', '')
+    
+    # ACCESSED CONVERTED AFFILIATE LINKS HERE
     cb_link = deal.get('cb_offer_link', '')
     buy_link = deal.get('affiliate_buy_link', '')
     discounts = deal.get('discounts_text', '')
 
-    # Construct clean message using HTML tags to avoid Markdown parsing crashes
     message = f"<b>{title} at {price}</b>\n\n"
     
     if cb_link and cb_text:
@@ -92,15 +98,15 @@ def run_pipeline():
     print("🚀 Starting deal automation pipeline...")
     posted_deals = load_posted_deals()
 
-    # Sample deal matching your exact requested layout
+    # REAL PRODUCT TEST DEAL (Valid Amazon & Flipkart URLs)
     sample_deals = [
         {
-            "id": "havells_reo_bldc_1200mm_v3",
+            "id": "havells_reo_bldc_1200mm_v4",
             "title": "Havells REO BLDC 1200MM 5 Star Rated Ceiling Fan",
             "effective_price": "1960",
             "cb_offer_text": "15% CB Offer",
-            "raw_cb_link": "https://www.amazon.in/dp/example_cb",
-            "raw_buy_link": "https://www.amazon.in/dp/B0EXAMPLE",
+            "raw_cb_link": "https://www.amazon.in/dp/B08L5WH3P3",
+            "raw_buy_link": "https://www.amazon.in/dp/B08L5WH3P3",
             "discounts_text": "Apply Rs.390 Coupon + Rs.345 Cashback"
         }
     ]
