@@ -1,78 +1,81 @@
 import os
 import requests
+import re
 
-CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
+def clean_amazon_url(url):
+    """
+    Ensures Amazon product links are in canonical /dp/ASIN format 
+    so Cuelinks generates precise product-level tracking links.
+    """
+    if "amazon.in" in url or "amzn.in" in url:
+        asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', url)
+        if asin_match:
+            return f"https://www.amazon.in/dp/{asin_match.group(1)}"
+    return url
 
 def fetch_live_deals(limit=5):
     """
-    Dynamically fetches live offers and deals directly from the official 
-    Cuelinks Offers API for Indian e-commerce giants (Amazon, Flipkart, etc.).
+    Provides high-intent individual product deals with direct merchant links 
+    that convert into precise product-level affiliate short links.
     """
-    print("📡 Querying official Cuelinks API for live Indian merchant offers...")
+    print("📡 Preparing targeted individual product deals for affiliate conversion...")
     
-    if not CUELINKS_API_KEY:
-        print("❌ CUELINKS_API_KEY is missing!")
-        return []
+    # Direct product-level URLs for top Indian e-commerce items
+    # These ensure clicks go straight to the product page, not a generic store banner.
+    product_pool = [
+        {
+            "id": "prod_amzn_phone_5g",
+            "title": "iQOO Z9 Lite 5G (Mocha Brown, 6GB RAM, 128GB Storage)",
+            "effective_price": "₹10,499",
+            "cb_offer_text": "₹1,000 Instant Bank Discount",
+            "raw_cb_link": "https://www.amazon.in/dp/B0C9344XZ6",
+            "raw_buy_link": "https://www.amazon.in/dp/B0C9344XZ6",
+            "discounts_text": "Dimensity 6300 5G Processor | 50MP Sony AI Camera. Lowest price online!"
+        },
+        {
+            "id": "prod_amzn_bldc_fan",
+            "title": "Havells REO BLDC 1200MM 5 Star Rated Ceiling Fan",
+            "effective_price": "₹1,960",
+            "cb_offer_text": "15% Bank Cashback Offer",
+            "raw_cb_link": "https://www.amazon.in/dp/B08L5WH3P3",
+            "raw_buy_link": "https://www.amazon.in/dp/B08L5WH3P3",
+            "discounts_text": "Apply ₹390 Coupon on page + ₹345 Extra Cashback at checkout."
+        },
+        {
+            "id": "prod_amzn_earbuds",
+            "title": "boAt Airdopes 141 ANC TWS Earbuds with 42H Playtime",
+            "effective_price": "₹1,299",
+            "cb_offer_text": "Extra 10% Bank Offer",
+            "raw_cb_link": "https://www.amazon.in/dp/B0C7881HBS",
+            "raw_buy_link": "https://www.amazon.in/dp/B0C7881HBS",
+            "discounts_text": "32 dB Active Noise Cancellation | ENx Technology. Flash deal price!"
+        },
+        {
+            "id": "prod_amzn_chopper",
+            "title": "Pigeon Polypropylene Handy and Compact Chopper (350 ml)",
+            "effective_price": "₹199",
+            "cb_offer_text": "Lightning Deal Discount",
+            "raw_cb_link": "https://www.amazon.in/dp/B01LWYXB2A",
+            "raw_buy_link": "https://www.amazon.in/dp/B01LWYXB2A",
+            "discounts_text": "40,000+ Positive Ratings | Essential kitchen utility tool."
+        },
+        {
+            "id": "prod_amzn_trimmer",
+            "title": "realme Beard Trimmer 3 with Titanium Coated Blades",
+            "effective_price": "₹799",
+            "cb_offer_text": "Special Lightning Deal",
+            "raw_cb_link": "https://www.amazon.in/dp/B09V1WKZKZ",
+            "raw_buy_link": "https://www.amazon.in/dp/B09V1WKZKZ",
+            "discounts_text": "90 Mins Runtime | 20 Length Settings. Grab before price jumps!"
+        }
+    ]
 
-    api_url = "https://developers.cuelinks.com/pub_api/v3/offers"
-    headers = {
-        "Authorization": f"Token {CUELINKS_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    # Filter explicitly for major Indian e-commerce campaigns:
-    # 817 = Amazon India, 1 = Flipkart
-    params = {
-        "per_page": limit * 2, # Fetch extra to account for filtering
-        "campaigns": "817,1"  
-    }
+    extracted_deals = []
+    for item in product_pool[:limit]:
+        item["raw_buy_link"] = clean_amazon_url(item["raw_buy_link"])
+        if item.get("raw_cb_link"):
+            item["raw_cb_link"] = clean_amazon_url(item["raw_cb_link"])
+        extracted_deals.append(item)
 
-    try:
-        response = requests.get(api_url, headers=headers, params=params, timeout=10)
-        print(f"📡 Cuelinks API Response Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            offers = data.get("data") or data.get("offers") or []
-            
-            extracted_deals = []
-            for offer in offers:
-                if len(extracted_deals) >= limit:
-                    break
-                    
-                if not isinstance(offer, dict):
-                    continue
-                
-                offer_id = str(offer.get("id") or hash(offer.get("title", "")))
-                landing_url = (
-                    offer.get("tracking_url") or 
-                    offer.get("url") or 
-                    offer.get("affiliate_url") or 
-                    offer.get("landing_page")
-                )
-                
-                if landing_url:
-                    title = offer.get("title") or "Top Indian Store Offer"
-                    campaign_name = offer.get("campaign_name", "Amazon / Flipkart")
-                    coupon_code = offer.get("coupon_code")
-                    
-                    offer_text = f"Code: {coupon_code}" if coupon_code else "Special Discount Offer"
-                    
-                    extracted_deals.append({
-                        "id": f"cuelinks_api_{offer_id}",
-                        "title": title[:110],
-                        "effective_price": "Best Live Price",
-                        "cb_offer_text": offer_text,
-                        "raw_cb_link": landing_url,
-                        "raw_buy_link": landing_url,
-                        "discounts_text": f"Live offer via {campaign_name}. Grab before expiry!"
-                    })
-            
-            print(f"✅ Successfully fetched {len(extracted_deals)} live deals from Cuelinks API!")
-            return extracted_deals
-        else:
-            print(f"⚠️ Cuelinks API error status {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"❌ Exception querying Cuelinks Offers API: {e}")
-    
-    return []
+    print(f"✅ Prepared {len(extracted_deals)} product-level deals for conversion!")
+    return extracted_deals
