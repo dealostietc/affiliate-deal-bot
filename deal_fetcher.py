@@ -1,14 +1,16 @@
 import os
 import requests
-import xml.etree.ElementTree as ET
+import re
+from xml.etree import ElementTree as ET
 
 CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
 
 def fetch_cuelinks_offers(limit=5):
     """
-    Attempts to fetch live coupons/offers directly from Cuelinks V3 API.
+    Fetches live offers directly from Cuelinks V3 API.
     """
     if not CUELINKS_API_KEY:
+        print("❌ CUELINKS_API_KEY is missing!")
         return []
 
     api_url = "https://developers.cuelinks.com/pub_api/v3/offers"
@@ -23,10 +25,7 @@ def fetch_cuelinks_offers(limit=5):
         
         if response.status_code == 200:
             data = response.json()
-            print(f"🔍 Raw Cuelinks Offers Response: {data}")  # Inspect structure
-            
-            # Support multiple V3 envelope types
-            offers = data.get("offers") or data.get("data") or (data if isinstance(data, list) else [])
+            offers = data.get("data") or data.get("offers") or []
             
             parsed_deals = []
             for offer in offers:
@@ -34,18 +33,27 @@ def fetch_cuelinks_offers(limit=5):
                     continue
                 
                 offer_id = str(offer.get("id") or hash(offer.get("title", "")))
-                landing_url = offer.get("url") or offer.get("affiliate_url") or offer.get("landing_page")
+                
+                # Check all possible URL fields in Cuelinks V3 schema
+                landing_url = (
+                    offer.get("tracking_url") or 
+                    offer.get("url") or 
+                    offer.get("affiliate_url") or 
+                    offer.get("landing_page")
+                )
                 
                 if landing_url:
                     parsed_deals.append({
                         "id": f"cuelinks_offer_{offer_id}",
-                        "title": offer.get("title") or offer.get("name") or "Special Deal",
-                        "effective_price": offer.get("sale_price") or "Best Price",
+                        "title": offer.get("title") or "Special Discount Offer",
+                        "effective_price": "Special Price",
                         "cb_offer_text": f"Coupon: {offer.get('coupon_code')}" if offer.get("coupon_code") else None,
                         "raw_cb_link": None,
                         "raw_buy_link": landing_url,
-                        "discounts_text": offer.get("description") or f"Store: {offer.get('store_name', 'Featured Merchant')}"
+                        "discounts_text": offer.get("description", "").strip() or f"Store: {offer.get('campaign_name', 'Merchant')}"
                     })
+            
+            print(f"✅ Extracted {len(parsed_deals)} live deals from Cuelinks!")
             return parsed_deals
     except Exception as e:
         print(f"❌ Exception in Cuelinks Offers API: {e}")
@@ -54,34 +62,37 @@ def fetch_cuelinks_offers(limit=5):
 
 def fetch_rss_deals(limit=5):
     """
-    Fallback deal aggregator: Fetches live top deals from RSS feeds (e.g., DesiDime).
-    Extracts title, link, and price alerts dynamically.
+    Fallback deal stream using robust regex pattern matching on DesiDime feed.
     """
-    print("📡 Fetching fallback deals from public deal stream...")
+    print("📡 Fetching fallback deals from public deal feed...")
     rss_url = "https://www.desidime.com/feed"
     deals = []
 
     try:
-        response = requests.get(rss_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(rss_url, headers=headers, timeout=10)
+        
         if response.status_code == 200:
-            root = ET.fromstring(response.content)
+            content = response.text
+            items = re.findall(r'<item>(.*?)</item>', content, re.DOTALL)
             
-            for item in root.findall("./channel/item")[:limit]:
-                title = item.find("title").text if item.find("title") is not None else "Top Deal"
-                link = item.find("link").text if item.find("link") is not None else None
-                description = item.find("description").text if item.find("description") is not None else ""
+            for item in items[:limit]:
+                title_match = re.search(r'<title>(.*?)</title>', item, re.DOTALL)
+                link_match = re.search(r'<link>(.*?)</link>', item, re.DOTALL)
+                
+                title = title_match.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if title_match else "Hot Deal Alert"
+                link = link_match.group(1).strip() if link_match else None
                 
                 if link:
-                    # Clean title and generate unique ID
-                    clean_id = f"rss_deal_{hash(link)}"
+                    clean_id = f"rss_deal_{abs(hash(link))}"
                     deals.append({
                         "id": clean_id,
-                        "title": title[:100],  # Shorten for neat formatting
+                        "title": title[:120],
                         "effective_price": "Deal Price",
-                        "cb_offer_text": "Hot Deal Alert",
+                        "cb_offer_text": "Loot Alert ⚡",
                         "raw_cb_link": None,
                         "raw_buy_link": link,
-                        "discounts_text": "Grab it before the price changes!"
+                        "discounts_text": "Check platform for applicable coupons & cashback!"
                     })
             print(f"✅ Fetched {len(deals)} dynamic deals from fallback stream!")
     except Exception as e:
@@ -91,10 +102,10 @@ def fetch_rss_deals(limit=5):
 
 def fetch_live_deals(limit=5):
     """
-    Main Orchestrator: Tries Cuelinks Offers API first; falls back to live deal stream if empty.
+    Main Orchestrator: Tries Cuelinks Offers API first; falls back to RSS feed.
     """
     deals = fetch_cuelinks_offers(limit=limit)
     if not deals:
-        print("ℹ️ Cuelinks API returned 0 deals. Switching to live public deal feed...")
+        print("ℹ️ Cuelinks API returned 0 valid deals. Switching to live public deal feed...")
         deals = fetch_rss_deals(limit=limit)
     return deals
