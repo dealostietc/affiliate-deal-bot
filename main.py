@@ -1,3 +1,33 @@
+import os
+import json
+import requests
+import re
+from urllib.parse import urlparse, urlunparse
+from deal_fetcher import fetch_live_deals
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
+
+CACHE_FILE = "posted_deals.json"
+
+def load_posted_deals():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ Cache read error: {e}")
+            return []
+    return []
+
+def save_posted_deals(posted_list):
+    try:
+        with open(CACHE_FILE, "w") as f:
+            json.dump(posted_list, f, indent=2)
+    except Exception as e:
+        print(f"⚠️ Cache write error: {e}")
+
 def clean_merchant_url(url):
     """
     Strips tracking queries and cleans Amazon URLs to prevent 404 Not Found errors.
@@ -30,7 +60,7 @@ def convert_to_affiliate_link(original_url):
     payload = {"url": clean_url, "shorten": True}
     
     try:
-        response = requests.post(api_url, json=payload, headers=headers)
+        response = requests.post(api_url, json=payload, headers=headers, timeout=8)
         data = response.json()
         
         if response.status_code in [200, 201]:
@@ -42,3 +72,81 @@ def convert_to_affiliate_link(original_url):
     except Exception as e:
         print(f"❌ Exception in conversion: {e}")
         return clean_url
+
+def send_deal_to_telegram(deal):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
+        print("❌ Missing Telegram credentials.")
+        return False
+
+    title = deal.get('title', '')
+    price = deal.get('effective_price', '')
+    cb_text = deal.get('cb_offer_text', '')
+    cb_link = deal.get('cb_offer_link', '')
+    buy_link = deal.get('affiliate_buy_link', '')
+    discounts = deal.get('discounts_text', '')
+
+    message = f"<b>{title} at {price}</b>\n\n"
+    
+    if cb_link and cb_text:
+        message += f"Collect {cb_text} : {cb_link}\n\n"
+    elif cb_text:
+        message += f"<b>Offer Info:</b> {cb_text}\n\n"
+        
+    message += f"Then Buy : {buy_link}\n\n"
+    
+    if discounts:
+        message += f"<i>{discounts}</i>"
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHANNEL_ID,
+        "text": message.strip(),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=8)
+        res_data = response.json()
+        print(f"📢 Telegram API Status: {res_data.get('ok')}")
+        return res_data.get("ok", False)
+    except Exception as e:
+        print(f"❌ Telegram exception: {e}")
+        return False
+
+def run_pipeline():
+    print("🚀 Starting dynamic product deal pipeline...")
+    posted_deals = load_posted_deals()
+
+    live_deals = fetch_live_deals(limit=5)
+
+    if not live_deals:
+        print("ℹ️ No new live deals returned from the stream.")
+        return
+
+    for deal in live_deals:
+        if deal["id"] in posted_deals:
+            print(f"⏭️ Skipping duplicate deal: {deal['title'][:30]}...")
+            continue
+
+        print(f"🔄 Converting links for: {deal['title']}")
+        deal["cb_offer_link"] = convert_to_affiliate_link(deal["raw_cb_link"]) if deal.get("raw_cb_link") else None
+        deal["affiliate_buy_link"] = convert_to_affiliate_link(deal["raw_buy_link"])
+
+        print(f"📤 Posting deal to Telegram...")
+        success = send_deal_to_telegram(deal)
+        
+        if success:
+            posted_deals.append(deal["id"])
+            print(f"✅ Successfully posted and cached deal ID: {deal['id']}")
+        else:
+            print(f"❌ Failed to post deal ID: {deal['id']}")
+
+    save_posted_deals(posted_deals)
+    print("🏁 Pipeline execution finished.")
+
+if __name__ == "__main__":
+    try:
+        run_pipeline()
+    except Exception as e:
+        print(f"❌ Unhandled Pipeline Crash: {e}")
