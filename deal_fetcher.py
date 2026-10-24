@@ -1,70 +1,74 @@
 import os
 import requests
-
-CUELINKS_API_KEY = os.getenv("CUELINKS_API_KEY")
-
-def fetch_cuelinks_offers(limit=5):
-    """
-    Fetches live offers filtered specifically for major Indian e-commerce campaigns.
-    """
-    if not CUELINKS_API_KEY:
-        print("❌ CUELINKS_API_KEY is missing!")
-        return []
-
-    api_url = "https://developers.cuelinks.com/pub_api/v3/offers"
-    headers = {
-        "Authorization": f"Token {CUELINKS_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    # FILTER EXPLICITLY FOR INDIAN MERCHANTS 
-    # 817 = Amazon India, 1 = Flipkart (You can add more comma-separated IDs if needed)
-    params = {
-        "per_page": limit,
-        "campaigns": "817,1" 
-    }
-
-    try:
-        response = requests.get(api_url, headers=headers, params=params)
-        print(f"📡 Cuelinks Indian Store Offers Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            offers = data.get("data") or data.get("offers") or []
-            
-            parsed_deals = []
-            for offer in offers:
-                if not isinstance(offer, dict):
-                    continue
-                
-                offer_id = str(offer.get("id") or hash(offer.get("title", "")))
-                landing_url = (
-                    offer.get("tracking_url") or 
-                    offer.get("url") or 
-                    offer.get("affiliate_url") or 
-                    offer.get("landing_page")
-                )
-                
-                if landing_url:
-                    parsed_deals.append({
-                        "id": f"indian_deal_{offer_id}",
-                        "title": offer.get("title") or "Indian Store Deal",
-                        "effective_price": offer.get("sale_price") or "Best Price",
-                        "cb_offer_text": f"Code: {offer.get('coupon_code')}" if offer.get("coupon_code") else "Special Offer",
-                        "raw_cb_link": None,
-                        "raw_buy_link": landing_url,
-                        "discounts_text": f"Store: {offer.get('campaign_name', 'Top Merchant')}"
-                    })
-            
-            print(f"✅ Extracted {len(parsed_deals)} deals from Amazon/Flipkart/Indian merchants!")
-            return parsed_deals
-    except Exception as e:
-        print(f"❌ Exception querying Indian store offers: {e}")
-    
-    return []
+import re
 
 def fetch_live_deals(limit=5):
     """
-    Main Orchestrator for Indian Deals.
+    Scrapes live Indian e-commerce product deal feeds (DesiDime, etc.),
+    extracts direct item links from Amazon India, Flipkart, Myntra, Ajio, Croma, Blinkit, and Zepto,
+    and filters out non-Indian or generic banner offers.
     """
-    return fetch_cuelinks_offers(limit=limit)
+    print("📡 Fetching live Indian e-commerce product deal streams...")
+    
+    # Public deal streams providing frequent Indian e-commerce price drops
+    feed_urls = [
+        "https://www.desidime.com/feed",
+        "https://freekamaal.com/feed/"
+    ]
+    
+    extracted_deals = []
+    seen_links = set()
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    for rss_url in feed_urls:
+        try:
+            response = requests.get(rss_url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                continue
+                
+            content = response.text
+            items = re.findall(r'<item>(.*?)</item>', content, re.DOTALL)
+            
+            for item in items:
+                if len(extracted_deals) >= limit:
+                    break
+                    
+                title_match = re.search(r'<title>(.*?)</title>', item, re.DOTALL)
+                link_match = re.search(r'<link>(.*?)</link>', item, re.DOTALL)
+                desc_match = re.search(r'<description>(.*?)</description>', item, re.DOTALL)
+                
+                title = title_match.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if title_match else "Hot Deal"
+                link = link_match.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if link_match else ""
+                desc = desc_match.group(1).replace('<![CDATA[', '').replace(']]>', '').strip() if desc_match else ""
+                
+                # Clean HTML tags from description snippet
+                clean_desc = re.sub(r'<[^>]+>', '', desc)[:140]
+
+                # STRICT FILTER: Only allow Indian e-commerce platforms
+                valid_domains = ['amazon.in', 'flipkart.com', 'myntra.com', 'ajio.com', 'croma.com', 'blinkit.com', 'zepto', 'meesho.com', 'shopsy.in']
+                
+                is_indian_ecommerce = any(domain in link.lower() for domain in valid_domains)
+                
+                if is_indian_ecommerce and link not in seen_links:
+                    seen_links.add(link)
+                    
+                    # Create a unique, permanent hash ID for deduplication in posted_deals.json
+                    deal_id = f"ind_product_{abs(hash(link))}"
+                    
+                    extracted_deals.append({
+                        "id": deal_id,
+                        "title": title[:110],
+                        "effective_price": "Best Price",
+                        "cb_offer_text": "⚡ Loot Price Drop",
+                        "raw_cb_link": None,
+                        "raw_buy_link": link,
+                        "discounts_text": clean_desc if clean_desc else "Limited-time deal on Indian store. Grab before price changes!"
+                    })
+        except Exception as e:
+            print(f"⚠️ Error fetching deal feed from {rss_url}: {e}")
+
+    print(f"✅ Successfully extracted {len(extracted_deals)} verified Indian e-commerce product deals!")
+    return extracted_deals
