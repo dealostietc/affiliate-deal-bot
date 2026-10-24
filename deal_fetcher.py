@@ -1,12 +1,10 @@
 import os
 import requests
 import re
-from xml.etree import ElementTree as ET
 
 def clean_amazon_url(url):
     """
-    Strips tracking queries and cleans Amazon India URLs into canonical /dp/ASIN format
-    so Cuelinks converts them without triggering 404 errors.
+    Extracts clean Amazon India product URL (/dp/ASIN) so Cuelinks converts it reliably.
     """
     if "amazon.in" in url or "amzn.in" in url:
         asin_match = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', url)
@@ -16,18 +14,18 @@ def clean_amazon_url(url):
 
 def fetch_live_deals(limit=5):
     """
-    Dynamically fetches live individual product deals from public Indian deal feeds.
-    Parses live XML streams, extracts actual merchant product URLs, and formats them.
+    Dynamically fetches live individual product deals from public Indian deal streams.
+    Includes strict timeout handling and secondary endpoints to prevent execution stalls.
     """
-    print("📡 Dynamically fetching live Indian e-commerce product deals...")
+    print("📡 Dynamically fetching live Indian product deals...")
     
     extracted_deals = []
     seen_links = set()
 
-    # Public RSS deal feeds that stream live individual Indian product price drops
+    # Priority 1: Public Indian Product Deal Streams
     feed_urls = [
         "https://www.desidime.com/feed",
-        "https://freekamaal.com/feed/"
+        "https://www.grabon.in/feed/"
     ]
 
     headers = {
@@ -39,9 +37,10 @@ def fetch_live_deals(limit=5):
         if len(extracted_deals) >= limit:
             break
         try:
-            response = requests.get(rss_url, headers=headers, timeout=10)
+            print(f"🔍 Attempting stream: {rss_url}")
+            response = requests.get(rss_url, headers=headers, timeout=5)
+            
             if response.status_code == 200:
-                # Parse XML item blocks
                 items = re.findall(r'<item>(.*?)</item>', response.text, re.DOTALL)
                 
                 for item in items:
@@ -59,29 +58,19 @@ def fetch_live_deals(limit=5):
                     if not raw_link or not title:
                         continue
 
-                    # Target Indian e-commerce merchants
-                    valid_domains = [
-                        'amazon.in', 'flipkart.com', 'myntra.com', 
-                        'ajio.com', 'croma.com', 'blinkit.com', 
-                        'zepto', 'meesho.com', 'shopsy.in'
-                    ]
-                    
-                    # Verify link or description points to a supported merchant
+                    # Strict Filter: Target individual Indian e-commerce merchants
+                    valid_domains = ['amazon.in', 'flipkart.com', 'myntra.com', 'ajio.com', 'croma.com', 'blinkit.com', 'zepto', 'meesho.com']
                     is_indian_merchant = any(domain in raw_link.lower() or domain in desc.lower() for domain in valid_domains)
                     
-                    # Clean Amazon URLs to prevent 404s
                     clean_url = clean_amazon_url(raw_link)
 
                     if is_indian_merchant and clean_url not in seen_links:
                         seen_links.add(clean_url)
                         
-                        # Extract price pattern (e.g. "Product at Rs. 499")
                         price_match = re.search(r'(?:at|@)\s*(?:Rs\.?|₹)\s*([\d,]+)', title, re.IGNORECASE)
-                        price = f"₹{price_match.group(1)}" if price_match else "Live Deal Price"
+                        price = f"₹{price_match.group(1)}" if price_match else "Flash Deal Price"
                         
-                        # Generate unique ID based on product link hash
-                        deal_id = f"dyn_deal_{abs(hash(clean_url))}"
-
+                        deal_id = f"dyn_prod_{abs(hash(clean_url))}"
                         clean_desc = re.sub(r'<[^>]+>', '', desc)[:130]
 
                         extracted_deals.append({
@@ -91,10 +80,10 @@ def fetch_live_deals(limit=5):
                             "cb_offer_text": "⚡ Live Price Drop",
                             "raw_cb_link": None,
                             "raw_buy_link": clean_url,
-                            "discounts_text": clean_desc if clean_desc else "Limited time offer on live product page."
+                            "discounts_text": clean_desc if clean_desc else "Limited time loot offer. Grab before stock ends!"
                         })
         except Exception as e:
-            print(f"⚠️ Error fetching from {rss_url}: {e}")
+            print(f"⚠️ Feed source error ({rss_url}): {e}")
 
-    print(f"✅ Successfully extracted {len(extracted_deals)} live dynamic product deals!")
+    print(f"✅ Extracted {len(extracted_deals)} live dynamic product deals!")
     return extracted_deals
